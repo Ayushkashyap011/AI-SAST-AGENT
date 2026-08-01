@@ -11,7 +11,7 @@ interface CodeAnalyzerProps {
   customCode: string;
   setCustomCode: (code: string) => void;
   onRunCustomScan: () => void;
-  onAnalyzeCustomFiles: (repoName: string, files: PresetFile[]) => void;
+  onAnalyzeCustomFiles: (repoName: string, files: PresetFile[]) => Promise<SecurityReport>;
   onResetWorkspace: () => void;
 }
 
@@ -121,51 +121,145 @@ export const CodeAnalyzer: React.FC<CodeAnalyzerProps> = ({
       const treeData = await treeRes.json();
       const items = treeData.tree || [];
 
-      const codeItems = items.filter((item: any) => {
-        if (item.type !== 'blob') return false;
-        const path = item.path.toLowerCase();
-        return (
-          path.endsWith('.py') ||
-          path.endsWith('.ts') ||
-          path.endsWith('.tsx') ||
-          path.endsWith('.js') ||
-          path.endsWith('.jsx') ||
-          path.endsWith('.sql') ||
-          path.endsWith('dockerfile')
-        );
-      }).slice(0, 60);
+      const vendorDirs = [
+        'node_modules', 'vendor', 'dist', 'build', 'out', 'coverage', '.next', '.nuxt',
+        '.cache', '.git', '.github', '.idea', '.vscode', '__pycache__', '.venv', 'venv',
+        'target', 'bin', 'obj', 'generated', 'tmp', 'temp', 'logs', 'public/vendor', 'static/vendor',
+        'test', 'tests', 'spec', 'specs', 'cypress', '__tests__', 'test-results'
+      ];
+
+      const generatedLockFiles = [
+        'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'poetry.lock', 'Cargo.lock', 'composer.lock'
+      ];
+
+      const frontendVendorLibs = [
+        'jquery', 'bootstrap', 'react.production', 'react-dom.production', 'angular', 'vue.runtime',
+        'lodash', 'underscore', 'moment', 'chart.js', 'morris', 'd3', 'leaflet', 'ckeditor', 'tinymce',
+        'ace', 'codemirror', 'highlight.js', 'anime.js', 'fontawesome'
+      ];
+
+      const supportedExts = [
+        '.py', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.go', '.java', '.cs',
+        '.php', '.rb', '.rs', '.kt', '.swift', 'dockerfile', '.yml', '.yaml', '.tf',
+        '.sh', '.sql', '.env.example', 'package.json', 'requirements.txt', 'pyproject.toml',
+        'go.mod', 'pom.xml', 'build.gradle', 'composer.json', 'Gemfile'
+      ];
+
+      let vendorCount = 0;
+      let minifiedCount = 0;
+      let generatedCount = 0;
+
+      const codeItems = items
+        .filter((item: any) => {
+          if (item.type !== 'blob') return false;
+          const path = item.path.toLowerCase();
+          const fileName = path.split('/').pop() || '';
+
+          // 1. Filter Vendor & Test Directories
+          if (vendorDirs.some(dir => path.includes(`/${dir}/`) || path.startsWith(`${dir}/`))) {
+            vendorCount++;
+            return false;
+          }
+
+          // 2. Filter Vendor Frontend Libraries & Test Spec Files
+          if (
+            frontendVendorLibs.some(lib => fileName.includes(lib)) ||
+            fileName.endsWith('_spec.js') ||
+            fileName.endsWith('-test.js') ||
+            fileName.endsWith('.test.js') ||
+            fileName.endsWith('.spec.js') ||
+            fileName.includes('test.js')
+          ) {
+            vendorCount++;
+            return false;
+          }
+
+          // 3. Filter Generated & Lock Files
+          if (generatedLockFiles.includes(fileName) || fileName.endsWith('.map')) {
+            generatedCount++;
+            return false;
+          }
+
+          // 4. Filter Minified Files
+          if (fileName.endsWith('.min.js') || fileName.endsWith('.bundle.js') || fileName.endsWith('.chunk.js')) {
+            minifiedCount++;
+            return false;
+          }
+
+          // Check supported extension
+          return supportedExts.some(ext => path.endsWith(ext) || fileName === ext);
+        })
+        .sort((a: any, b: any) => {
+          const aPath = a.path.toLowerCase();
+          const bPath = b.path.toLowerCase();
+          const keyDirs = ['routes/', 'controllers/', 'services/', 'api/', 'lib/', 'server/', 'src/', 'app/', 'middleware/', 'auth/', 'models/', 'database/', 'db/', 'repositories/', 'utils/', 'config/'];
+          const aScore = keyDirs.some(d => aPath.includes(d)) ? 1 : 0;
+          const bScore = keyDirs.some(d => bPath.includes(d)) ? 1 : 0;
+          return bScore - aScore;
+        });
 
       if (codeItems.length === 0) {
-        throw new Error('No Python, TypeScript, JavaScript, or SQL files found in repository.');
+        throw new Error('No application source files found in repository.');
       }
 
-      setUploadStatus(`Fetching ${codeItems.length} code files from raw.githubusercontent.com...`);
+      setUploadStatus(`Fetching ${codeItems.length} application source files from raw.githubusercontent.com...`);
 
-      const fetchedFiles: PresetFile[] = await Promise.all(
+      const fetchedFiles: PresetFile[] = (await Promise.all(
         codeItems.map(async (item: any) => {
           const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${defaultBranch}/${item.path}`;
           const rawRes = await fetch(rawUrl);
           const content = await rawRes.text();
 
-          const ext = item.path.split('.').pop()?.toLowerCase();
-          let lang: PresetFile['language'] = 'python';
-          if (ext === 'ts' || ext === 'tsx') lang = 'typescript';
-          else if (ext === 'js' || ext === 'jsx') lang = 'javascript';
-          else if (ext === 'sql') lang = 'sql';
-          else if (ext === 'py') lang = 'python';
+          // Skip minified JS files (avg line length > 500 chars or sourceMappingURL)
+          const lines = content.split('\n');
+          const avgLineLength = content.length / Math.max(1, lines.length);
+          if ((avgLineLength > 500 || content.includes('sourceMappingURL=')) && (item.path.endsWith('.js') || item.path.endsWith('.cjs'))) {
+            minifiedCount++;
+            return null;
+          }
+
+          const ext = (item.path || '').split('.').pop()?.toLowerCase();
+          const fileNameLower = (item.path || '').toLowerCase();
+
+          let lang: PresetFile['language'] = 'javascript';
+          if (fileNameLower.includes('dockerfile')) {
+            lang = 'dockerfile';
+          } else if (ext === 'py') {
+            lang = 'python';
+          } else if (ext === 'ts' || ext === 'tsx') {
+            lang = 'typescript';
+          } else if (ext === 'js' || ext === 'jsx' || ext === 'mjs' || ext === 'cjs') {
+            lang = 'javascript';
+          } else if (ext === 'sql') {
+            lang = 'sql';
+          }
 
           return {
-            name: item.path.split('/').pop() || item.path,
-            path: item.path,
+            name: (item.path || '').split('/').pop() || item.path || 'unknown_file',
+            path: item.path || 'unknown_file',
             language: lang,
             content
           };
         })
-      );
+      )).filter((f): f is PresetFile => f !== null);
 
-      setUploadStatus(`Successfully fetched ${fetchedFiles.length} files. Launching ARIES SAST Scan...`);
-      onAnalyzeCustomFiles(`${owner}/${repo}`, fetchedFiles);
-      setActiveFile(fetchedFiles[0]);
+      setUploadStatus(`Successfully fetched ${fetchedFiles.length} application source files. Launching ARIES SAST Scan...`);
+      const scanReport = await onAnalyzeCustomFiles(`${owner}/${repo}`, fetchedFiles);
+
+      // Auto-select first file with detected vulnerabilities if available
+      const firstVulnFinding = scanReport?.findings.find(f => fetchedFiles.some(ff => ff.path === f.filePath));
+      if (firstVulnFinding) {
+        const matchingFile = fetchedFiles.find(ff => ff.path === firstVulnFinding.filePath);
+        if (matchingFile) {
+          setActiveFile(matchingFile);
+          onSelectFinding(firstVulnFinding);
+        } else {
+          setActiveFile(fetchedFiles[0]);
+        }
+      } else {
+        setActiveFile(fetchedFiles[0]);
+      }
+
       setActiveMode('preset');
     } catch (err: any) {
       console.error(err);

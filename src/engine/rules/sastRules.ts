@@ -428,17 +428,41 @@ export const SAST_RULES: SASTRule[] = [
     cvssScore: 9.3,
     confidence: 97,
     languages: ['python', 'typescript', 'javascript'],
-    pattern: /(open\(|os\.remove\(|os\.unlink\(|pathlib\.Path\.open\(|shutil\.copy\(|shutil\.move\(|os\.path\.join\(|Path\([^)]+\)\s*\/)\s*\(?\s*(f"|f'|`|"[^"]*" \+|'[^']*' \+|\w+\s*\+|\w+)/i,
-    falsePositiveFilter: (_match, line, fullContent) => {
+    pattern: /(open\(|pathlib\.Path\.open\(|os\.remove\(|os\.unlink\(|os\.rename\(|os\.replace\(|os\.mkdir\(|os\.rmdir\(|shutil\.copy\(|shutil\.copyfile\(|shutil\.move\(|shutil\.rmtree\(|tar\.extract|zip\.extract|fs\.readFile|fs\.readFileSync|fs\.writeFile|fs\.writeFileSync|fs\.appendFile|fs\.open|fs\.unlink|fs\.rename|fs\.copyFile|fs\.rm|fs\.mkdir|fs\.createReadStream|fs\.createWriteStream)\s*\(?\s*([a-zA-Z0-9_\.]+)/i,
+    falsePositiveFilter: (_match, line, fullContent, lineIdx) => {
       const trimmed = line.trim();
-      return (
-        trimmed.startsWith('#') ||
-        trimmed.startsWith('//') ||
-        fullContent.includes('secure_filename') ||
-        fullContent.includes('.resolve()') ||
-        fullContent.includes('os.path.abspath') ||
-        fullContent.includes('is_relative_to')
-      );
+      if (trimmed.startsWith('#') || trimmed.startsWith('//')) return true;
+
+      // Prevent command injection or browser API confusion
+      if (line.includes('window.open(') || line.includes('window.location') || line.includes('subprocess.') || line.includes('child_process')) {
+        return true;
+      }
+
+      // 1. Suppress if path originates from __file__ or constant directory
+      if (line.includes('__file__') || line.includes('os.path.dirname') || line.includes('Path(__file__)')) {
+        return true;
+      }
+
+      // 2. Inspect surrounding 15 lines for verified untrusted source
+      const untrustedSourcesRegex = /(request\.args|request\.form|request\.values|request\.json|request\.files|request\.GET|request\.POST|request\.data|request\.headers|req\.body|req\.query|req\.params|req\.headers|process\.argv|process\.env|sys\.argv|argparse|click|os\.environ|input\(|URLSearchParams)/i;
+      
+      const lines = fullContent.split('\n');
+      const start = Math.max(0, lineIdx - 15);
+      const end = Math.min(lines.length - 1, lineIdx + 5);
+      const scopeBlock = lines.slice(start, end + 1).join('\n');
+
+      const hasUntrustedSource = untrustedSourcesRegex.test(scopeBlock);
+      if (!hasUntrustedSource) {
+        return true; // No untrusted source -> Suppress false positive!
+      }
+
+      // 3. Suppress if canonicalization or path sanitization exists
+      const sanitizersRegex = /(\.resolve\(|os\.path\.abspath|os\.path\.realpath|\.is_relative_to\(|startswith|startsWith|commonpath|allowlist|path\.normalize|os\.path\.normpath|secure_filename)/i;
+      if (sanitizersRegex.test(scopeBlock)) {
+        return true;
+      }
+
+      return false;
     },
     explanation: 'Untrusted function parameter or user input flows directly into filesystem operations without path canonicalization.',
     rootCause: 'Accepting raw filename parameters in open(), os.remove(), or Path() operations allows dot-dot-slash (../) directory traversal.',

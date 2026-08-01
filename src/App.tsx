@@ -102,6 +102,7 @@ def find_user(username):
               setSelectedRepo(customRepo);
               const newReport = await SASTEngine.analyzeFiles(repoName, files);
               setReport(newReport);
+              return newReport;
             }}
           />
         )}

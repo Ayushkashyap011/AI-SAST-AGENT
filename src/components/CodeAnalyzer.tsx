@@ -10,7 +10,7 @@ interface CodeAnalyzerProps {
   onSelectFinding: (finding: VulnerabilityFinding | null) => void;
   customCode: string;
   setCustomCode: (code: string) => void;
-  onRunCustomScan: () => void;
+  onRunCustomScan: (overrideLang?: string) => void;
   onAnalyzeCustomFiles: (repoName: string, files: PresetFile[]) => Promise<SecurityReport>;
   onResetWorkspace: () => void;
 }
@@ -29,6 +29,7 @@ export const CodeAnalyzer: React.FC<CodeAnalyzerProps> = ({
   const [activeFile, setActiveFile] = useState<PresetFile | null>(selectedRepo.files[0] || null);
   const [copied, setCopied] = useState(false);
   const [activeMode, setActiveMode] = useState<'preset' | 'custom' | 'zip' | 'url'>('url');
+  const [selectedLang, setSelectedLang] = useState<string>('auto');
   const [repoUrl, setRepoUrl] = useState('');
   const [isFetchingUrl, setIsFetchingUrl] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string>('');
@@ -161,14 +162,13 @@ export const CodeAnalyzer: React.FC<CodeAnalyzerProps> = ({
             return false;
           }
 
-          // 2. Filter Vendor Frontend Libraries & Test Spec Files
+          // 2. Filter Vendor Frontend Libraries & Explicit Test Specs
           if (
             frontendVendorLibs.some(lib => fileName.includes(lib)) ||
             fileName.endsWith('_spec.js') ||
             fileName.endsWith('-test.js') ||
             fileName.endsWith('.test.js') ||
-            fileName.endsWith('.spec.js') ||
-            fileName.includes('test.js')
+            fileName.endsWith('.spec.js')
           ) {
             vendorCount++;
             return false;
@@ -425,16 +425,40 @@ export const CodeAnalyzer: React.FC<CodeAnalyzerProps> = ({
           </div>
         ) : activeMode === 'custom' ? (
           <div className="custom-code-container">
-            <div className="code-editor-header" style={{ flexShrink: 0, position: 'sticky', top: 0, zIndex: 10 }}>
+            <div className="code-editor-header" style={{ flexShrink: 0, position: 'sticky', top: 0, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
               <div style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--text-primary)' }}>
                 Paste Source Code for Instant SAST Audit
               </div>
-              <button className="scan-trigger-btn" onClick={async () => {
-                await onRunCustomScan();
-                setActiveMode('preset');
-              }} style={{ background: 'linear-gradient(135deg, #38bdf8, #2563eb)', color: '#ffffff', fontWeight: 700, padding: '0.5rem 1.25rem' }}>
-                <Zap size={16} /> Analyze Snippet
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <select
+                  value={selectedLang}
+                  onChange={e => setSelectedLang(e.target.value)}
+                  style={{
+                    background: 'var(--bg-dark)',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '6px',
+                    padding: '0.4rem 0.6rem',
+                    fontSize: '0.8rem',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <option value="auto">Auto Detect Language</option>
+                  <option value="javascript">JavaScript (.js)</option>
+                  <option value="typescript">TypeScript (.ts)</option>
+                  <option value="python">Python (.py)</option>
+                </select>
+                <button
+                  className="scan-trigger-btn"
+                  onClick={async () => {
+                    await onRunCustomScan(selectedLang === 'auto' ? undefined : selectedLang);
+                    setActiveMode('preset');
+                  }}
+                  style={{ background: 'linear-gradient(135deg, #38bdf8, #2563eb)', color: '#ffffff', fontWeight: 700, padding: '0.5rem 1.25rem' }}
+                >
+                  <Zap size={16} /> Analyze Snippet
+                </button>
+              </div>
             </div>
             <div style={{ display: 'flex', flex: 1, minHeight: 0, backgroundColor: 'var(--bg-dark)', fontFamily: 'var(--font-mono)', overflow: 'hidden' }}>
               {/* Line Numbers Gutter */}

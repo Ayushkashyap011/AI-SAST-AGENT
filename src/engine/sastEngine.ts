@@ -248,16 +248,16 @@ export class SASTEngine {
         });
       }
     } else {
-      // JS/TS Brace-Counting Scope Parsing
+      // JS/TS Brace-Counting Scope Parsing (Supporting arrow functions, Express callbacks, and anonymous functions)
       let currentFunc: { name: string; params: string[]; startLine: number; braceDepth: number; lines: string[]; isExported: boolean } | null = null;
 
       lines.forEach((line, idx) => {
-        const jsMatch = /(?:function\s+([a-zA-Z0-9_]+)|const\s+([a-zA-Z0-9_]+)\s*=\s*(?:async\s*)?\(([^)]*)\)|([a-zA-Z0-9_]+)\s*\(([^)]*)\)\s*\{)/.exec(line);
+        const jsMatch = /(?:function\s+([a-zA-Z0-9_]+)|const\s+([a-zA-Z0-9_]+)\s*=\s*(?:async\s*)?\(([^)]*)\)|([a-zA-Z0-9_]+)\s*\(([^)]*)\)\s*\{|(?:app|router)\.(?:get|post|put|delete|use|route)\s*\([^,]+,\s*(?:async\s*)?(?:function\s*)?\(([^)]*)\))/.exec(line);
 
         if (jsMatch && !currentFunc) {
-          const name = jsMatch[1] || jsMatch[2] || jsMatch[4] || '';
-          const paramsStr = jsMatch[3] || jsMatch[5] || '';
-          const params = paramsStr.split(',').map(p => p.trim().split('=')[0].split(':')[0].trim()).filter(p => /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(p));
+          const name = jsMatch[1] || jsMatch[2] || jsMatch[4] || `anon_func_L${idx + 1}`;
+          const paramsStr = jsMatch[3] || jsMatch[5] || jsMatch[6] || '';
+          const params = (paramsStr || '').split(',').map(p => p.trim().split('=')[0].split(':')[0].trim()).filter(p => /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(p));
           const isExported = line.includes('export') || line.includes('module.exports');
 
           const openBraces = (line.match(/\{/g) || []).length;
@@ -267,7 +267,7 @@ export class SASTEngine {
             name,
             params,
             startLine: idx + 1,
-            braceDepth: openBraces - closeBraces,
+            braceDepth: Math.max(1, openBraces - closeBraces),
             lines: [line],
             isExported
           };
@@ -374,7 +374,7 @@ export class SASTEngine {
         severity: 'CRITICAL' as const,
         owasp: 'A03:2021-Injection' as const,
         cvss: 9.8,
-        regex: /(db\.query|db\.all|db\.get|db\.run|mysql\.query|pool\.query|client\.query|prisma\.\$queryRawUnsafe|sequelize\.query|knex\.raw|db\.execute|collection\.find|collection\.findOne|collection\.insert|collection\.update|collection\.deleteOne|collection\.deleteMany|collection\.aggregate|mongoose\.find|mongoose\.findOne|mongoose\.update|Model\.find|Model\.findOne)\s*\(\s*([a-zA-Z0-9_\.]+)/
+        regex: /(mysql\.query|mysql\.execute|mysql2\.query|mysql2\.execute|connection\.query|pool\.query|pg\.query|client\.query|prisma\.\$queryRawUnsafe|sequelize\.query|knex\.raw|sqlite3\.run|sqlite3\.get|sqlite3\.all|TypeORM\.query|db\.query|db\.all|db\.get|db\.run|db\.execute|collection\.find|collection\.findOne|collection\.insert|collection\.update|collection\.deleteOne|collection\.deleteMany|collection\.aggregate|mongoose\.find|mongoose\.findOne|mongoose\.update|Model\.find|Model\.findOne)\s*\(?\s*([a-zA-Z0-9_\.]+)/
       },
       {
         type: 'CMDI',
@@ -419,7 +419,7 @@ export class SASTEngine {
         severity: 'HIGH' as const,
         owasp: 'A03:2021-Injection' as const,
         cvss: 8.2,
-        regex: /(res\.render|ejs\.render|pug\.render|handlebars\.compile|innerHTML|outerHTML|dangerouslySetInnerHTML|document\.write)\s*\(?\s*([a-zA-Z0-9_\.]+)/
+        regex: /(res\.render|ejs\.render|pug\.render|handlebars\.compile|Handlebars\.compile|innerHTML|outerHTML|dangerouslySetInnerHTML|document\.write|insertAdjacentHTML|res\.send|res\.json)\s*\(?\s*([a-zA-Z0-9_\.]+)/
       }
     ];
 
@@ -548,6 +548,14 @@ export class SASTEngine {
             }
           }
 
+          if (sinkConfig.type === 'XSS' && (line.includes('res.send') || line.includes('res.json'))) {
+            const scopeBlock = lines.slice(Math.max(0, lineIdx - 5), lineIdx + 1).join(' ');
+            const hasHtmlConstruction = /<[a-z1-6]+[^>]*>/i.test(scopeBlock) || line.includes('`') || scopeBlock.includes('html') || scopeBlock.includes('render');
+            if (!hasHtmlConstruction) {
+              continue;
+            }
+          }
+
           const sinkMatch = sinkConfig.regex.exec(line);
           if (sinkMatch && !funcHasSanitizer) {
             const queriedVar = sinkMatch[2];
@@ -641,8 +649,23 @@ export class SASTEngine {
       });
     };
 
-    // Analyze module top-level scope & internal functions
+    // Analyze module top-level scope
     analyzeScope(lines, new Map(), 0);
+
+    // Analyze every parsed function & Express route handler scope
+    for (const funcDef of Array.from(parsedMod.functions.values())) {
+      const funcTaintedMap = new Map<string, TaintVarNode>();
+      funcDef.params.forEach(p => {
+        if (/^(req|request|ctx|body|query|params|data|input|cmd|file|path|url|id)$/i.test(p) || p.length > 0) {
+          funcTaintedMap.set(p, {
+            name: p,
+            source: `${p} (Handler Parameter)`,
+            history: [`Source: ${p} (Handler Parameter)`]
+          });
+        }
+      });
+      analyzeScope(funcDef.lines, funcTaintedMap, funcDef.startLine - 1, 1);
+    }
 
     return findings;
   }

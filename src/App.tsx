@@ -1,10 +1,28 @@
 import React, { useState } from 'react';
-import type { SecurityReport, VulnerabilityFinding, PresetRepo } from './types/sast';
+import type { SecurityReport, VulnerabilityFinding, PresetRepo, PresetFile } from './types/sast';
 import { SASTEngine } from './engine/sastEngine';
 import { Header } from './components/Header';
 import { LandingPage } from './components/LandingPage';
 import { CodeAnalyzer } from './components/CodeAnalyzer';
 import { RationalePage } from './components/RationalePage';
+
+export function detectSnippetLanguage(code: string, overrideLang?: string): { language: 'python' | 'javascript' | 'typescript'; filename: string } {
+  if (overrideLang === 'python') return { language: 'python', filename: 'custom_input.py' };
+  if (overrideLang === 'javascript') return { language: 'javascript', filename: 'custom_input.js' };
+  if (overrideLang === 'typescript') return { language: 'typescript', filename: 'custom_input.ts' };
+
+  const isTs = /(?:interface\s+\w+|enum\s+\w+|type\s+\w+\s*=|implements\s+\w+|readonly\s+|import\s+type\s+|:\s*(?:string|number|boolean|any|void)|<[A-Z]>\s*\(|\bpublic\s+|\bprivate\s+|\bprotected\s+)/.test(code);
+  if (isTs) {
+    return { language: 'typescript', filename: 'custom_input.ts' };
+  }
+
+  const isPy = /(?:def\s+\w+|import\s+(?:os|sys|flask|requests|django|fastapi|pathlib)|from\s+\w+\s+import|if\s+__name__\s*==|class\s+\w+.*:|print\(|#)/.test(code);
+  if (isPy) {
+    return { language: 'python', filename: 'custom_input.py' };
+  }
+
+  return { language: 'javascript', filename: 'custom_input.js' };
+}
 
 const INITIAL_EMPTY_REPORT: SecurityReport = {
   timestamp: new Date().toISOString(),
@@ -43,11 +61,13 @@ def find_user(username):
     return cursor.fetchall()
 `);
 
-  const handleRunCustomScan = async () => {
-    const customFile = {
-      name: 'custom_input.py',
-      path: 'user_uploaded/custom_input.py',
-      language: 'python' as const,
+  const handleRunCustomScan = async (overrideLang?: string) => {
+    if (!customCode.trim()) return;
+    const detected = detectSnippetLanguage(customCode, overrideLang);
+    const customFile: PresetFile = {
+      name: detected.filename,
+      path: detected.filename,
+      language: detected.language,
       content: customCode
     };
     const customRepo: PresetRepo = {

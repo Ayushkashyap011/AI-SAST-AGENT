@@ -34,7 +34,7 @@ export const SAST_RULES: SASTRule[] = [
     cvssScore: 9.8,
     confidence: 98,
     languages: ['python', 'typescript', 'javascript', 'sql'],
-    pattern: /(cursor\.execute|cursor\.executemany|engine\.execute|db\.execute|session\.execute|db\.query|db\.all|db\.get|db\.run|mysql\.query|pool\.query|client\.query|prisma\.\$queryRawUnsafe|sequelize\.query|knex\.raw)\s*\(\s*(f"""|f'''|f"|f'|`[^`]*\$\{.*\}|"[^"]*" \+|'[^']*' \+)|\b(query|sql|stmt|cmd)\s*=\s*(f"|f'|f"""|f'''|`[^`]*\$\{.*\}|"[^"]*" \+|'[^']*' \+)/i,
+    pattern: /(cursor\.execute|cursor\.executemany|engine\.execute|db\.execute|session\.execute|db\.query|db\.all|db\.get|db\.run|mysql\.query|mysql\.execute|mysql2\.query|mysql2\.execute|connection\.query|pool\.query|pg\.query|client\.query|prisma\.\$queryRawUnsafe|sequelize\.query|knex\.raw|sqlite3\.run|sqlite3\.get|sqlite3\.all|TypeORM\.query)\s*\(\s*(f"""|f'''|f"|f'|`[^`]*\$\{.*\}|"[^"]*" \+|'[^']*' \+|\w+\s*\+)|\b(query|sql|stmt|cmd)\s*=\s*(f"|f'|f"""|f'''|`[^`]*\$\{.*\}|"[^"]*" \+|'[^']*' \+|\w+\s*\+)/i,
     falsePositiveFilter: (_match, line, fullContent, lineIdx) => {
       const trimmed = line.trim();
       if (trimmed.startsWith('#') || trimmed.startsWith('//') || line.includes('SELECT * FROM static_table')) {
@@ -47,7 +47,7 @@ export const SAST_RULES: SASTRule[] = [
       const end = Math.min(lines.length - 1, lineIdx + 5);
       const block = lines.slice(start, end + 1).join(' ');
 
-      const sqlSinksRegex = /(cursor\.execute|cursor\.executemany|engine\.execute|session\.execute|db\.execute|db\.query|db\.all|db\.get|db\.run|mysql\.query|pool\.query|client\.query|prisma\.\$queryRawUnsafe|sequelize\.query|knex\.raw)/i;
+      const sqlSinksRegex = /(cursor\.execute|cursor\.executemany|engine\.execute|session\.execute|db\.execute|db\.query|db\.all|db\.get|db\.run|mysql\.query|mysql\.execute|mysql2\.query|mysql2\.execute|connection\.query|pool\.query|pg\.query|client\.query|prisma\.\$queryRawUnsafe|sequelize\.query|knex\.raw|sqlite3\.run|sqlite3\.get|sqlite3\.all|TypeORM\.query)/i;
       
       // If the formatted string is NOT consumed by a SQL sink, never classify as SQL Injection
       return !sqlSinksRegex.test(block);
